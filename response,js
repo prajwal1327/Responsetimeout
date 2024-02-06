@@ -1,0 +1,65 @@
+const { google } = require('googleapis');
+const monitoring = google.monitoring('v3');
+
+exports.monitorApi = async (req, res) => {
+  const project = process.env.GOOGLE_CLOUD_PROJECT;
+  const apiEndpoint = 'https://example.com/api'; 
+  const location = 'us-central1';
+  const responseTimeThreshold = 500; 
+
+  try {
+    // Perform synthetic monitoring
+    const startTime = new Date().toISOString();
+    const response = await fetch(apiEndpoint);
+    const endTime = new Date().toISOString();
+    const responseTime = new Date(endTime) - new Date(startTime);
+
+    // Check response time against threshold
+    if (responseTime > responseTimeThreshold) {
+      // Response time exceeded threshold, trigger an alert
+      await triggerAlert(project, location, apiEndpoint, responseTime);
+    }
+
+    // Return success response
+    res.status(200).send('API monitoring completed successfully.');
+  } catch (error) {
+    // Handle errors
+    console.error('Error:', error);
+    res.status(500).send('Internal Server Error.');
+  }
+};
+
+async function triggerAlert(project, location, apiEndpoint, responseTime) {
+  const auth = await google.auth.getClient({
+    scopes: ['https://www.googleapis.com/auth/cloud-platform'],
+  });
+  google.options({ auth });
+
+  // Construct alerting policy
+  const alert = {
+    alertPolicy: {
+      displayName: 'API Response Time Alert',
+      conditions: [
+        {
+          displayName: 'High API Response Time',
+          conditionThreshold: {
+            filter: `metric.type="custom.googleapis.com/api_response_time" AND resource.type="cloud_function" AND resource.labels.function_name="monitorApi" AND resource.labels.region="${location}"`,
+            duration: '60s',
+            comparison: 'COMPARISON_GT',
+            thresholdValue: responseTimeThreshold / 1000, // Convert to seconds
+            aggregations: [{ alignmentPeriod: '60s', perSeriesAligner: 'ALIGN_RATE' }],
+            trigger: { count: 1 },
+          },
+        },
+      ],
+      notificationChannels: ['projects/your-project-id/notificationChannels/your-notification-channel-id'], // Replace with your notification channel
+      combiner: 'OR',
+    },
+  };
+
+  // Create alerting policy
+  await monitoring.projects.alertPolicies.create({
+    name: `projects/${project}`,
+    requestBody: alert,
+  });
+}
